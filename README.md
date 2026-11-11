@@ -1,15 +1,11 @@
-# Pre-entrega 1: Cliente de LLM robusto y asíncrono
+# Pre-entrega 2: Pipeline de procesamiento validado
 
-Cliente unificado en Python 3.12 para OpenAI y Anthropic. Implementa una interfaz
-común mediante `AsyncLLMManager`, llamadas asíncronas con los SDKs oficiales,
-streaming de texto, validación con Pydantic y manejo controlado de errores.
+Pipeline asíncrono de extracción de entidades técnicas con Pydantic, LangChain
+y OpenAI. Reutiliza la configuración validada del cliente de la pre-entrega 1.
 
 ## Instalación
 
-Desde la carpeta del repositorio, crear el entorno virtual e instalar las
-dependencias de `requirements.txt`.
-
-### Windows (PowerShell)
+Python 3.12. En Windows (PowerShell):
 
 ```powershell
 py -3.12 -m venv .venv
@@ -17,7 +13,7 @@ py -3.12 -m venv .venv
 Copy-Item .env.example .env
 ```
 
-### Linux y macOS
+En Linux o macOS:
 
 ```bash
 python3.12 -m venv .venv
@@ -25,71 +21,53 @@ python3.12 -m venv .venv
 cp .env.example .env
 ```
 
-Si `.env` ya existe, editarlo sin reemplazarlo. Contiene las credenciales
-locales y está excluido de Git.
-
-## Variables de entorno
-
-Configurar `.env` junto a `main.py`. Las variables del sistema tienen prioridad
-sobre los valores del archivo.
-
-| Variable | Valor predeterminado | Descripción |
-| --- | --- | --- |
-| `LLM_PROVIDER` | `openai` | Proveedor activo: `openai` o `anthropic` |
-| `OPENAI_API_KEY` | Vacío | Clave requerida si el proveedor activo es OpenAI |
-| `ANTHROPIC_API_KEY` | Vacío | Clave requerida si el proveedor activo es Anthropic |
-| `OPENAI_MODEL` | `gpt-4.1-mini` | Modelo de OpenAI habilitado en la cuenta |
-| `ANTHROPIC_MODEL` | `claude-haiku-4-5` | Modelo de Anthropic habilitado en la cuenta |
-| `LLM_TEMPERATURE` | `0.7` | Rango de 0 a 2 para OpenAI y de 0 a 1 para Anthropic |
-| `LLM_MAX_TOKENS` | `256` | Límite de salida; entero mayor que cero |
-| `LLM_TIMEOUT` | `30` | Timeout de red por operación, en segundos |
-| `LLM_MAX_RETRIES` | `2` | Reintentos adicionales del SDK; entre 0 y 5 |
-
-Solo se necesita la clave del proveedor activo. Para usar Anthropic, establecer
-`LLM_PROVIDER=anthropic` y completar `ANTHROPIC_API_KEY`. Los nombres de modelo
-son configurables y deben estar disponibles en la cuenta correspondiente.
+Si `.env` ya existe, editarlo sin reemplazarlo. Configurar `LLM_PROVIDER=openai`
+y `OPENAI_API_KEY` con una clave válida. El modelo predeterminado es
+`gpt-4.1-mini`. También se reutilizan `LLM_TEMPERATURE`, `LLM_MAX_TOKENS`,
+`LLM_TIMEOUT` y `LLM_MAX_RETRIES` del módulo 1.
 
 ## Ejecución
 
-Windows:
-
 ```powershell
-.\.venv\Scripts\python.exe main.py
+.\.venv\Scripts\python.exe test_pipeline.py
 ```
 
-Linux y macOS:
+En Linux o macOS: `.venv/bin/python test_pipeline.py`.
+El script realiza una llamada real a OpenAI y requiere cuota disponible.
 
-```bash
-.venv/bin/python main.py
+Ejemplo de salida:
+
+```json
+{
+  "tecnologias": ["FastAPI", "Redis", "PostgreSQL"],
+  "nivel_de_criticidad": "alta",
+  "resumen_tecnico": "API con FastAPI, caché en Redis y persistencia en PostgreSQL; servicio caído por agotamiento del pool de conexiones."
+}
 ```
 
-`main.py` carga `.env` y realiza la pregunta «¿Qué es la entropía?» en modo
-normal y en streaming con el proveedor seleccionado. Primero imprime un
-`ModelResponse` en JSON y luego los fragmentos de texto conforme llegan.
-Cada ejecución realiza dos solicitudes reales y requiere credenciales válidas
-y cuota disponible en el proveedor.
+`process_text(text: str)` en `chain.py` devuelve una instancia de
+`EntidadesTecnicas`. La cadena combina `ChatPromptTemplate` con
+`model.with_structured_output(EntidadesTecnicas)` mediante LCEL y se ejecuta
+con `.ainvoke()`.
 
-Los errores de red, timeout, autenticación y límite de tasa se informan de forma
-controlada. Los reintentos están limitados por `LLM_MAX_RETRIES`. Un stream
-interrumpido no se reinicia para evitar duplicar texto. El script devuelve
-código de salida `0` si ambos modos funcionan, `1` ante errores controlados y
-`130` si se cancela con Ctrl+C.
+Los tres campos son obligatorios. La criticidad solo acepta `baja`, `media` o
+`alta`; el resumen y los nombres de tecnologías no pueden estar vacíos.
+Si el texto no menciona tecnologías, se acepta `tecnologias: []`.
+Ante información ambigua, se usa criticidad `media` sin inventar tecnologías.
 
-## Pruebas sin credenciales
+`.with_retry(stop_after_attempt=2)` permite un reintento ante JSON inválido,
+campos faltantes o respuestas truncadas. El SDK detecta `finish_reason=length`
+antes de transformar el contenido y lanza `LengthFinishReasonError`.
+Si ambos intentos fallan, la excepción se propaga. Los logs muestran cada
+intento y el resultado de la validación. `LLM_MAX_RETRIES` controla por separado
+los reintentos de red del SDK.
 
-Windows:
+## Pruebas
 
 ```powershell
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
 ```
 
-Linux y macOS:
-
-```bash
-.venv/bin/python -m unittest discover -s tests -v
-```
-
-Las pruebas utilizan los SDKs oficiales con un transporte HTTP simulado.
-Verifican selección de proveedores, validación, generación, streaming y manejo
-de errores sin claves ni consumo de crédito. No comprueban el acceso a los
-servicios reales.
+En Linux o macOS: `.venv/bin/python -m unittest discover -s tests -v`.
+Las pruebas simulan HTTP sin credenciales reales. Incluyen recuperación ante
+JSON mal formado, campos incompletos, truncamiento y texto ambiguo.

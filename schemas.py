@@ -1,6 +1,7 @@
 """Contratos comunes: se validan antes de enviar datos a cualquier API."""
 
-from typing import Literal, Self
+from enum import Enum
+from typing import Annotated, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
 
@@ -9,6 +10,24 @@ Provider = Literal["openai", "anthropic"]
 
 class Schema(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, str_strip_whitespace=True)
+
+
+class NivelCriticidad(str, Enum):
+    baja = "baja"
+    media = "media"
+    alta = "alta"
+
+
+class EntidadesTecnicas(Schema):
+    """Información técnica extraída del texto de entrada."""
+
+    tecnologias: list[Annotated[str, Field(min_length=1, strict=True)]] = Field(
+        description="Tecnologías mencionadas explícitamente; lista vacía si no hay ninguna."
+    )
+    nivel_de_criticidad: NivelCriticidad = Field(
+        description="baja: sin fallos; media: degradación o impacto incierto; alta: caída o pérdida de datos."
+    )
+    resumen_tecnico: str = Field(min_length=1, description="Resumen técnico breve en español.")
 
 
 class ChatMessage(Schema):

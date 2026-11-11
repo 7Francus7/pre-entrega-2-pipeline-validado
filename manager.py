@@ -9,6 +9,19 @@ from errors import LLMClientError
 from schemas import ChatMessage, Credentials, ErrorInfo, ModelConfig, ModelResponse
 
 
+def load_model_config() -> ModelConfig:
+    provider = os.getenv("LLM_PROVIDER", "openai").strip().lower()
+    default_model = "gpt-4.1-mini" if provider == "openai" else "claude-haiku-4-5"
+    return ModelConfig.model_validate({
+        "provider": provider,
+        "model": os.getenv(f"{provider.upper()}_MODEL", default_model),
+        "temperature": os.getenv("LLM_TEMPERATURE", "0.7"),
+        "max_tokens": os.getenv("LLM_MAX_TOKENS", "256"),
+        "timeout": os.getenv("LLM_TIMEOUT", "30"),
+        "max_retries": os.getenv("LLM_MAX_RETRIES", "2"),
+    })
+
+
 class AsyncLLMManager:
     def __init__(self, config: ModelConfig, api_key: str):
         if not api_key.strip():
@@ -23,17 +36,8 @@ class AsyncLLMManager:
     @classmethod
     def from_env(cls) -> Self:
         # main.py carga .env; la biblioteca también acepta variables del sistema.
-        provider = os.getenv("LLM_PROVIDER", "openai").strip().lower()
-        default_model = "gpt-4.1-mini" if provider == "openai" else "claude-haiku-4-5"
-        config = ModelConfig.model_validate({
-            "provider": provider,
-            "model": os.getenv(f"{provider.upper()}_MODEL", default_model),
-            "temperature": os.getenv("LLM_TEMPERATURE", "0.7"),
-            "max_tokens": os.getenv("LLM_MAX_TOKENS", "256"),
-            "timeout": os.getenv("LLM_TIMEOUT", "30"),
-            "max_retries": os.getenv("LLM_MAX_RETRIES", "2"),
-        })
-        return cls(config, os.getenv(f"{provider.upper()}_API_KEY", ""))
+        config = load_model_config()
+        return cls(config, os.getenv(f"{config.provider.upper()}_API_KEY", ""))
 
     async def generate(self, messages: list[ChatMessage]) -> ModelResponse:
         return await self.client.generate(messages)
