@@ -63,6 +63,11 @@ Si ambos intentos fallan, la excepción se propaga. Los logs muestran cada
 intento y el resultado de la validación. `LLM_MAX_RETRIES` controla por separado
 los reintentos de red del SDK.
 
+Cada procesamiento lleva un identificador que se conserva durante el reintento.
+Los logs indican el número de intento, su duración y si la validación se recuperó.
+Esto permite seguir llamadas concurrentes sin registrar el texto de entrada ni
+las credenciales.
+
 ## Uso y manejo de errores
 
 `process_text()` devuelve el objeto validado o lanza una excepción:

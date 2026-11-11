@@ -1,5 +1,7 @@
+import asyncio
 import json
 import os
+import re
 import unittest
 from unittest.mock import patch
 
@@ -88,6 +90,61 @@ class PipelineTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(requests[0]["messages"], requests[1]["messages"])
                 self.assertTrue(any("Respuesta inválida" in line for line in logs.output))
                 self.assertTrue(any("Validación correcta" in line for line in logs.output))
+                self.assertTrue(any("Intento 1/2" in line for line in logs.output))
+                self.assertTrue(any("Intento 2/2" in line for line in logs.output))
+                self.assertTrue(any("Validación correcta tras reintento" in line for line in logs.output))
+
+    async def test_concurrent_calls_keep_independent_traces(self):
+        texts = [
+            "FastAPI con Redis y PostgreSQL. Servicio caído. Ticket privado A.",
+            "FastAPI con Redis y PostgreSQL. Servicio caído. Ticket privado B.",
+        ]
+        requests = {}
+        second_call_started = asyncio.Event()
+        http_clients = []
+
+        async def handler(request):
+            content = json.loads(request.content)["messages"][1]["content"]
+            requests[content] = requests.get(content, 0) + 1
+            if texts[0] in content and requests[content] == 1:
+                await second_call_started.wait()
+                return httpx.Response(200, json=completion("{}"))
+            if texts[1] in content:
+                second_call_started.set()
+            return httpx.Response(200, json=completion(json.dumps(VALID_OUTPUT)))
+
+        def sdk_factory(**kwargs):
+            http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+            http_clients.append(http_client)
+            self.addAsyncCleanup(http_client.aclose)
+            return AsyncOpenAI(**kwargs, http_client=http_client)
+
+        with patch("chain.AsyncOpenAI", side_effect=sdk_factory), self.assertLogs("chain", level="INFO") as logs:
+            results = await asyncio.wait_for(
+                asyncio.gather(*(process_text(text) for text in texts)), timeout=30,
+            )
+
+        self.assertTrue(all(isinstance(result, EntidadesTecnicas) for result in results))
+        self.assertEqual(sorted(requests.values()), [1, 2])
+        self.assertTrue(all(client.is_closed for client in http_clients))
+        traces = {}
+        for record in logs.records:
+            message = record.getMessage()
+            match = re.match(r"\[([0-9a-f]{32})\]", message)
+            self.assertIsNotNone(match, message)
+            traces.setdefault(match.group(1), []).append(message)
+            for text in texts:
+                self.assertNotIn(text, message)
+            self.assertNotIn("test-key", message)
+
+        self.assertEqual(len(traces), 2)
+        attempt_counts = []
+        for messages in traces.values():
+            attempt_counts.append(sum("Intento " in message for message in messages))
+            self.assertEqual(sum("Validación correcta" in message for message in messages), 1)
+        self.assertEqual(sorted(attempt_counts), [1, 2])
+        self.assertEqual(sum("tras reintento" in message for message in logs.output), 1)
+        self.assertEqual(sum("duración del intento:" in message for message in logs.output), 3)
 
     async def test_retry_truncation_before_parsing(self):
         with self.assertLogs("chain", level="WARNING") as logs:
@@ -100,13 +157,15 @@ class PipelineTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(any("LengthFinishReasonError" in line for line in logs.output))
 
     async def test_two_invalid_attempts_propagate_validation_error(self):
-        with self.assertLogs("chain", level="ERROR") as logs:
+        with self.assertLogs("chain", level="INFO") as logs:
             with self.assertRaises(ValidationError):
                 await self.run_pipeline([
                     httpx.Response(200, json=completion("{}")),
                     httpx.Response(200, json=completion("{}")),
                 ])
         self.assertTrue(any("después de dos intentos" in line for line in logs.output))
+        self.assertEqual(sum("Se reintentará." in line for line in logs.output), 1)
+        self.assertEqual(sum("Sin intentos disponibles." in line for line in logs.output), 1)
         self.assertEqual(len(self.requests), 2)
 
     async def test_two_truncated_attempts_propagate_length_error(self):
