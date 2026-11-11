@@ -53,7 +53,8 @@ con `.ainvoke()`.
 Los tres campos son obligatorios. La criticidad solo acepta `baja`, `media` o
 `alta`; el resumen y los nombres de tecnologías no pueden estar vacíos.
 Si el texto no menciona tecnologías, se acepta `tecnologias: []`.
-Ante información ambigua, se usa criticidad `media` sin inventar tecnologías.
+El prompt indica usar criticidad `media` ante impacto incierto, sin inventar
+tecnologías.
 
 `.with_retry(stop_after_attempt=2)` permite un reintento ante JSON inválido,
 campos faltantes o respuestas truncadas. El SDK detecta `finish_reason=length`
@@ -61,6 +62,50 @@ antes de transformar el contenido y lanza `LengthFinishReasonError`.
 Si ambos intentos fallan, la excepción se propaga. Los logs muestran cada
 intento y el resultado de la validación. `LLM_MAX_RETRIES` controla por separado
 los reintentos de red del SDK.
+
+## Uso y manejo de errores
+
+`process_text()` devuelve el objeto validado o lanza una excepción:
+
+- `ValueError`: texto vacío, entrada que no es un string o proveedor distinto de OpenAI.
+- `ValidationError`: configuración inválida antes de llamar a la API, o respuesta
+  que incumple el esquema después de dos intentos.
+- `OutputParserException`: respuesta sin un objeto válido después de dos intentos.
+- `LengthFinishReasonError`: respuesta truncada en ambos intentos.
+- `OpenAIError`: error del SDK de OpenAI, como autenticación, cuota, red o timeout.
+  Solo los fallos transitorios se reintentan según `LLM_MAX_RETRIES`.
+
+Ejemplo de consumo asíncrono:
+
+```python
+import asyncio
+
+from langchain_core.exceptions import OutputParserException
+from openai import LengthFinishReasonError, OpenAIError
+from pydantic import ValidationError
+
+from chain import process_text
+
+
+async def main():
+    try:
+        result = await process_text("FastAPI usa Redis; el servicio está caído.")
+    except (ValidationError, OutputParserException, LengthFinishReasonError) as exc:
+        print("Configuración o respuesta inválida:", type(exc).__name__)
+    except ValueError as exc:
+        print("Entrada o proveedor inválido:", exc)
+    except OpenAIError as exc:
+        print("Error de OpenAI:", type(exc).__name__)
+    else:
+        print(result.model_dump_json(indent=2))
+
+
+asyncio.run(main())
+```
+
+El ejemplo contempla el agotamiento de los reintentos y los errores de
+configuración. `ValidationError` se captura antes de `ValueError` porque es
+una subclase de esta última. Los errores de autenticación no se reintentan.
 
 ## Pruebas
 
